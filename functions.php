@@ -174,7 +174,10 @@ function wk_delete_user_callback($request)
 
 
 
-
+// 30 sep 2024
+add_role('user', 'User', array(
+    'read' => true,
+    ));
 
 
 ?>

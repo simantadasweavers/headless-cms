@@ -1,0 +1,7 @@
+user role manager: 
+
+ROLES: 
+
+user => only view posts, create account
+manager => edit, patch posts, view 
+administrator =>  do everything! 
