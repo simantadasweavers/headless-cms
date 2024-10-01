@@ -3,6 +3,9 @@ require('vendor/autoload.php');
 use Firebase\JWT\JWT;
 use Firebase\JWT\Key;
 
+/**
+ * JWT_SECRET_KEY = constant define under wp-config.php
+ */
 
 
 // registering custom routes: auth/account
@@ -19,6 +22,12 @@ add_action('rest_api_init', function () {
         'permission_callback' => '__return_true', // Use for bypassing permissions for now
         'args' => validate_login_user_arguments(),
     ));
+    register_rest_route('rest-apis/v1', 'account/update/', array(
+        'methods' => 'PUT',
+        'callback' => 'update_user_func',
+        'permission_callback' => 'jwt_auth_permission_callback',
+        'args' => validate_update_user_arguments(),
+    ));
     register_rest_route('rest-apis/v1', 'account/delete/', array(
         'methods' => 'DELETE',
         'callback' => 'delete_user_func',
@@ -26,6 +35,35 @@ add_action('rest_api_init', function () {
         'args' => validate_delete_user_arguments(),
     ));
 });
+
+function jwt_auth_permission_callback($request) {
+    $auth_header = $request->get_header('Authorization');
+
+    if (!$auth_header || strpos($auth_header, 'Bearer ') !== 0) {
+        return new WP_Error('jwt_auth_no_token', 'Missing JWT token', array('status' => 403));
+    }
+
+    $token = str_replace('Bearer ', '', $auth_header);
+ 
+
+    try {
+        $decoded = JWT::decode($token, JWT_AUTH_SECRET_KEY, array('HS256'));
+
+        if ($decoded && isset($decoded->data->user_id)) {
+            // Validate the user ID in the token and grant permission
+            $user = get_user_by('id', $decoded->data->user_id);
+            if ($user) {
+                return true;
+            }
+        }
+    } catch (Exception $e) {
+        return new WP_Error('jwt_auth_invalid_token', $e->getMessage(), array('status' => 403));
+    }
+
+    return new WP_Error('jwt_auth_invalid_permission', 'Invalid token or user', array('status' => 403));
+}
+
+
 function validate_register_user_arguments()
 {
     $args = array();
@@ -109,34 +147,6 @@ function register_user_func($request)
             );
         } else {
 
-            // user wp-config.php file defined key value 
-            $key = "ze8ZcMszzuDDskotpuOKMtSBD9nA5vy5";
-
-            // Current time
-            $now = time();
-            // Set 'exp' to 2 days from now
-            $two_days_from_now = $now + (2 * 86400);  // 86400 seconds in a day
-
-            $payload = [
-                'iat' => $now,  // issued at: current time
-                'exp' => $two_days_from_now,  // expiration: 2 days from now
-                'email' => $email,
-                'token_type' => 'access',
-            ];
-            $access_jwt = JWT::encode($payload, $key, 'HS256');
-
-
-            // Set 'exp' to 30 days from now
-            $thirty_days_from_now = $now + (30 * 86400);  // 86400 seconds in a day
-            $payload = [
-                'iat' => $now,  // issued at: current time
-                'exp' => $thirty_days_from_now,  // expiration: 30 days from now
-                'email' => $email,
-                'token_type' => 'refresh',
-            ];
-            $refresh_jwt = JWT::encode($payload, $key, 'HS256');
-
-
             $userdata = array(
                 'user_nicename' => $first_name,
                 'nickname' => $first_name,
@@ -150,12 +160,38 @@ function register_user_func($request)
             );
             $user_id = wp_insert_user($userdata);
 
-            $return_arr = array('id' => $user_id, 'first_name' => $first_name, 'last_name' => $last_name, 'email' => $email, 'username' => $username, 'password' => $password, 'access_token' => $access_jwt, 'refresh_token' => $refresh_jwt);
-            $response_message = "user registered successfully";
+             // Current time
+             $now = time();
+             // Set 'exp' to 2 days from now
+             $two_days_from_now = $now + (2 * 86400);  // 86400 seconds in a day
+ 
+             $payload = [
+                 'iat' => $now,  // issued at: current time
+                 'exp' => $two_days_from_now,  // expiration: 2 days from now
+                 'email' => $email,
+                 'user_id' => $user_id,
+                 'token_type' => 'access',
+             ];
+             $access_jwt = JWT::encode($payload, JWT_SECRET_KEY, 'HS256');
+ 
+ 
+             // Set 'exp' to 30 days from now
+             $thirty_days_from_now = $now + (30 * 86400);  // 86400 seconds in a day
+             $payload = [
+                 'iat' => $now,  // issued at: current time
+                 'exp' => $thirty_days_from_now,  // expiration: 30 days from now
+                 'email' => $email,
+                 'user_id' => $user_id,
+                 'token_type' => 'refresh',
+             ];
+             $refresh_jwt = JWT::encode($payload, JWT_SECRET_KEY, 'HS256');
+
+             $return_arr = array('id' => $user_id, 'first_name' => $first_name, 'last_name' => $last_name, 'email' => $email, 'username' => $username, 'password' => $password, 'access_token' => $access_jwt, 'refresh_token' => $refresh_jwt);
+
             return new WP_REST_Response(
                 array(
                     'status' => 200,
-                    'message' => $response_message,
+                    'message' => "user registered successfully",
                     'data' => $return_arr
                 ),
                 200
@@ -196,8 +232,7 @@ function login_user_func($request)
     $user = wp_authenticate($username, $password);
 
     if (!is_wp_error($user)) {
-        // user wp-config.php file defined key value 
-        $key = "ze8ZcMszzuDDskotpuOKMtSBD9nA5vy5";
+
 
         // set expiration within 2 days
         $now = time();
@@ -207,8 +242,9 @@ function login_user_func($request)
             'exp' => $two_days_from_now,
             'email' => $user->user_email,
             'token_type' => 'access',
+            'user_id' => $user->ID,
         ];
-        $access_jwt = JWT::encode($payload, $key, 'HS256');
+        $access_jwt = JWT::encode($payload, JWT_SECRET_KEY, 'HS256');
 
         // Set 'exp' to 30 days from now
         $thirty_days_from_now = $now + (30 * 86400);
@@ -217,15 +253,16 @@ function login_user_func($request)
             'exp' => $thirty_days_from_now,
             'email' => $user->user_email,
             'token_type' => 'refresh',
+            'user_id' => $user->ID,
         ];
-        $refresh_jwt = JWT::encode($payload, $key, 'HS256');
+        $refresh_jwt = JWT::encode($payload, JWT_SECRET_KEY, 'HS256');
 
         $user = array('name' => $user->display_name, 'email' => $user->user_email);
         // Successful login
         return new WP_REST_Response(
             array(
                 'status' => 200,
-                'message' => time(),
+                'message' => "login successful",
                 'user' => $user,
                 'access_token' => $access_jwt,
                 'refresh_token' => $refresh_jwt,
@@ -266,19 +303,16 @@ function login_user_func($request)
 function validate_delete_user_arguments()
 {
     $args = array();
-
     $args['id'] = array(
         'type' => 'string',
         'required' => true,
         'description' => 'this field is required',
     );
-
     $args['token'] = array(
         'type' => 'string',
         'required' => true,
         'description' => 'this field is required',
     );
-
     return $args;
 }
 // delete user functionality check.
@@ -288,11 +322,8 @@ function delete_user_func($request)
     $id = isset($return_arr['id']) ? sanitize_text_field($return_arr['id']) : '';
     $token = isset($return_arr['token']) ? sanitize_text_field($return_arr['token']) : '';
 
-    // Replace by wp-config.php (Make sure you store the key securely)
-    $key = "ze8ZcMszzuDDskotpuOKMtSBD9nA5vy5";
-
     try {
-        JWT::decode($token, new Key($key, 'HS256'));
+        JWT::decode($token, new Key(JWT_SECRET_KEY, 'HS256'));
 
         if (get_userdata($id)) {
             global $wpdb;
@@ -331,5 +362,90 @@ function delete_user_func($request)
     }
 }
 
+
+// update user arguments validation check.
+function validate_update_user_arguments()
+{
+    $args = array();
+
+    $args['first_name'] = array(
+        'type' => 'string',
+        'required' => false,
+    );
+
+    $args['last_name'] = array(
+        'type' => 'string',
+        'required' => false,
+    );
+
+    $args['email'] = array(
+        'type' => 'string',
+        'required' => false,
+        'validate_callback' => function ($param, $request, $key) {
+            // Direct email validation using WordPress's is_email function
+            if (!is_email($param)) {
+                return new WP_Error('invalid_email', 'The provided email is not valid.', array('status' => 400));
+            }
+            return true;
+        },
+    );
+
+    $args['username'] = array(
+        'type' => 'string',
+        'required' => false,
+    );
+    return $args;
+}
+// update user functionality check.
+function update_user_func($request)
+{
+    $return_arr = $request->get_params();
+
+    //  getting arguments value from api endpoints and sanitize it
+    $first_name = isset($return_arr['first_name']) ? sanitize_text_field($return_arr['first_name']) : '';
+    $last_name = isset($return_arr['last_name']) ? sanitize_text_field($return_arr['last_name']) : '';
+    $email = isset($return_arr['email']) ? sanitize_email($return_arr['email']) : '';
+    $username = isset($return_arr['username']) ? sanitize_text_field($return_arr['username']) : '';
+    
+    if($first_name){
+        // wp_update_user(array('ID' => ));
+
+        return new WP_REST_Response(
+            array(
+                'status' => 201,
+                'message' => "first name",
+            ),
+            201
+        );
+    }
+    if($last_name){
+        return new WP_REST_Response(
+            array(
+                'status' => 201,
+                'message' => "last name",
+            ),
+            201
+        );
+    }
+    if($username){
+        return new WP_REST_Response(
+            array(
+                'status' => 201,
+                'message' => "user name",
+            ),
+            201
+        );
+    }
+    if($email){
+        return new WP_REST_Response(
+            array(
+                'status' => 201,
+                'message' => "email",
+            ),
+            201
+        );
+    }
+
+}
 
 ?>
